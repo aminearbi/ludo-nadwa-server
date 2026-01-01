@@ -15,7 +15,7 @@ A classical Ludo board game server implementation written in Go. This server pro
 
 ### Prerequisites
 
-- Go 1.20 or higher
+- Go 1.21 or higher
 
 ### Installation
 

@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"fmt"
 	"math/rand"
 	"sync"
 	"time"
@@ -83,16 +84,8 @@ func NewGameManager() *GameManager {
 
 // GenerateGameCode generates an 8-digit game code
 func GenerateGameCode() string {
-	rand.Seed(time.Now().UnixNano())
-	code := rand.Intn(90000000) + 10000000 // Ensures 8 digits
-	return string(rune(code/10000000+'0')) +
-		string(rune((code/1000000)%10+'0')) +
-		string(rune((code/100000)%10+'0')) +
-		string(rune((code/10000)%10+'0')) +
-		string(rune((code/1000)%10+'0')) +
-		string(rune((code/100)%10+'0')) +
-		string(rune((code/10)%10+'0')) +
-		string(rune(code%10+'0'))
+	code := rand.Intn(90000000) + 10000000 // Ensures 8 digits (10000000-99999999)
+	return fmt.Sprintf("%08d", code)
 }
 
 // CreateGame creates a new game
@@ -212,7 +205,6 @@ func (g *Game) StartGame() error {
 
 // RollDice simulates a dice roll
 func (g *Game) RollDice() int {
-	rand.Seed(time.Now().UnixNano())
 	roll := rand.Intn(6) + 1
 	g.mu.Lock()
 	g.LastDiceRoll = roll
