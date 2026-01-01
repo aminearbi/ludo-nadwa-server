@@ -79,8 +79,8 @@ func TestJoinGame(t *testing.T) {
 		if !piece.IsHome {
 			t.Error("Piece should start at home")
 		}
-		if piece.Position != -1 {
-			t.Errorf("Expected piece position to be -1, got %d", piece.Position)
+		if piece.Position != HomePosition {
+			t.Errorf("Expected piece position to be HomePosition (-1), got %d", piece.Position)
 		}
 	}
 }

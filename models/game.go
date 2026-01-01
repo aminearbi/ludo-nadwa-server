@@ -19,6 +19,14 @@ const (
 	Purple PlayerColor = "purple"
 )
 
+// Game board constants
+const (
+	BoardMaxPosition = 51  // Maximum position on the board before reaching finish
+	FinishPosition   = 100 // Position indicating piece has finished
+	PiecesPerPlayer  = 4   // Number of pieces each player has
+	HomePosition     = -1  // Position indicating piece is at home
+)
+
 // Piece represents a single game piece
 type Piece struct {
 	ID       int  `json:"id"`
@@ -154,11 +162,11 @@ func (gm *GameManager) JoinGame(code, playerID, playerName string) (*Game, error
 	color := colors[len(game.Players)%5]
 
 	// Create pieces for the player
-	pieces := make([]Piece, 4)
-	for i := 0; i < 4; i++ {
+	pieces := make([]Piece, PiecesPerPlayer)
+	for i := 0; i < PiecesPerPlayer; i++ {
 		pieces[i] = Piece{
 			ID:       i,
-			Position: -1,
+			Position: HomePosition,
 			IsHome:   true,
 			IsSafe:   false,
 		}
@@ -247,9 +255,9 @@ func (g *Game) MovePiece(playerID string, pieceID int) error {
 	} else {
 		// Move piece forward
 		piece.Position += g.LastDiceRoll
-		// Simplified: if position > 51, piece reaches home (finished)
-		if piece.Position > 51 {
-			piece.Position = 100 + pieceID
+		// If position exceeds board max, piece reaches finish area
+		if piece.Position > BoardMaxPosition {
+			piece.Position = FinishPosition + pieceID
 			piece.IsSafe = true
 		}
 	}
@@ -257,7 +265,7 @@ func (g *Game) MovePiece(playerID string, pieceID int) error {
 	// Check if player won (all pieces finished)
 	allFinished := true
 	for _, p := range player.Pieces {
-		if p.Position < 100 {
+		if p.Position < FinishPosition {
 			allFinished = false
 			break
 		}
