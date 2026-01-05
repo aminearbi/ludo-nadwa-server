@@ -1,0 +1,59 @@
+/* Responsive square board */
+#ludo-board {
+  width: min(90vw, 600px);
+  aspect-ratio: 1 / 1;
+  margin: auto;
+  display: grid;
+  grid-template-columns: repeat(15, 1fr);
+  grid-template-rows: repeat(15, 1fr);
+  border: 4px solid #222;
+}
+
+/* Generic cell */
+.cell {
+  border: 1px solid #444;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.cell:hover {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* Home zones */
+.green-home  { background: #8fdc8f; }
+.yellow-home { background: #ffe680; }
+.blue-home   { background: #8ac6ff; }
+.red-home    { background: #ff9a9a; }
+
+/* Path cells */
+.path {
+  background: #fff;
+}
+
+/* Safe cells */
+.safe {
+  border: 3px solid #000;
+}
+
+/* Center star */
+.center {
+  background: white;
+  position: relative;
+}
+
+.center::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(
+    #2e7d32 0deg 90deg,
+    #f9a825 90deg 180deg,
+    #1565c0 180deg 270deg,
+    #c62828 270deg 360deg
+  );
+  clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+}

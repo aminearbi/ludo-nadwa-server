@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ludo Nadwa - Play Online!</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka+One&family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Particle container for effects -->
+    <div id="particles"></div>
+    
+    <!-- Audio elements -->
+    <audio id="diceSound" src="https://assets.mixkit.co/active_storage/sfx/2003/2003-preview.mp3" preload="auto"></audio>
+    <audio id="moveSound" src="https://assets.mixkit.co/active_storage/sfx/270/270-preview.mp3" preload="auto"></audio>
+    <audio id="captureSound" src="https://assets.mixkit.co/active_storage/sfx/2018/2018-preview.mp3" preload="auto"></audio>
+    <audio id="winSound" src="https://assets.mixkit.co/active_storage/sfx/1435/1435-preview.mp3" preload="auto"></audio>
+
+    <!-- Lobby Screen -->
+    <div id="lobby-screen" class="screen active">
+        <div class="lobby-container">
+            <h1 class="game-title">
+                <span class="letter red">L</span>
+                <span class="letter blue">U</span>
+                <span class="letter green">D</span>
+                <span class="letter yellow">O</span>
+                <span class="subtitle">Nadwa</span>
+            </h1>
+            
+            <div class="lobby-card">
+                <div class="tabs">
+                    <button class="tab active" data-tab="create">Create Game</button>
+                    <button class="tab" data-tab="join">Join Game</button>
+                </div>
+                
+                <div class="tab-content active" id="create-tab">
+                    <div class="form-group">
+                        <label>Your Name</label>
+                        <input type="text" id="create-name" placeholder="Enter your name" maxlength="30">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Players</label>
+                        <div class="player-select">
+                            <button class="player-btn" data-players="2">2</button>
+                            <button class="player-btn active" data-players="4">4</button>
+                            <button class="player-btn hex-mode" data-players="5" title="Hexagonal board">5⬡</button>
+                            <button class="player-btn hex-mode" data-players="6" title="Hexagonal board">6⬡</button>
+                        </div>
+                        <small class="board-hint">5-6 players use a hexagonal board</small>
+                    </div>
+                    <button class="btn btn-primary" id="create-btn">
+                        <span>🎲</span> Create Game
+                    </button>
+                </div>
+                
+                <div class="tab-content" id="join-tab">
+                    <div class="form-group">
+                        <label>Your Name</label>
+                        <input type="text" id="join-name" placeholder="Enter your name" maxlength="30">
+                    </div>
+                    <div class="form-group">
+                        <label>Game Code</label>
+                        <input type="text" id="game-code" placeholder="Enter 8-digit code" maxlength="8">
+                    </div>
+                    <button class="btn btn-primary" id="join-btn">
+                        <span>🎯</span> Join Game
+                    </button>
+                </div>
+            </div>
+            
+            <p class="footer-text">Made with ❤️ for fun game nights!</p>
+        </div>
+    </div>
+
+    <!-- Waiting Room Screen -->
+    <div id="waiting-screen" class="screen">
+        <div class="waiting-container">
+            <h2>Waiting Room</h2>
+            <div class="game-code-display">
+                <span>Game Code:</span>
+                <div class="code" id="display-code">12345678</div>
+                <button class="copy-btn" id="copy-code">📋 Copy</button>
+            </div>
+            
+            <div class="players-list" id="players-list">
+                <!-- Players will be added here -->
+            </div>
+            
+            <div class="waiting-actions">
+                <label class="ready-toggle">
+                    <input type="checkbox" id="ready-checkbox">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Ready</span>
+                </label>
+                <button class="btn btn-success" id="start-btn" style="display: none;">
+                    <span>🚀</span> Start Game
+                </button>
+                <button class="btn btn-danger" id="leave-btn">
+                    <span>🚪</span> Leave
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="game-screen" class="screen">
+        <div class="game-layout">
+            <!-- Left Panel - Players -->
+            <div class="side-panel left-panel">
+                <h3>Players</h3>
+                <div id="game-players-list" class="game-players">
+                    <!-- Players will be added here -->
+                </div>
+            </div>
+            
+            <!-- Center - Game Board -->
+            <div class="board-container">
+                <canvas id="game-board" width="600" height="600"></canvas>
+                
+                <!-- Dice Area -->
+                <div class="dice-area">
+                    <div class="dice" id="dice">
+                        <div class="dice-face" id="dice-face">?</div>
+                    </div>
+                    <button class="btn btn-roll" id="roll-btn" disabled>
+                        🎲 Roll Dice
+                    </button>
+                    <div class="turn-indicator" id="turn-indicator">
+                        Waiting...
+                    </div>
+                </div>
+                
+                <!-- Valid Moves -->
+                <div class="valid-moves" id="valid-moves" style="display: none;">
+                    <span>Select a piece to move:</span>
+                    <div class="piece-buttons" id="piece-buttons"></div>
+                    <button class="btn btn-skip" id="skip-btn" style="display: none;">Skip Turn</button>
+                </div>
+            </div>
+            
+            <!-- Right Panel - Chat -->
+            <div class="side-panel right-panel">
+                <h3>Chat</h3>
+                <div class="chat-messages" id="chat-messages">
+                    <!-- Messages will be added here -->
+                </div>
+                <div class="chat-input">
+                    <input type="text" id="chat-input" placeholder="Type a message..." maxlength="500">
+                    <button class="btn btn-send" id="send-chat">➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Winner Modal -->
+    <div id="winner-modal" class="modal">
+        <div class="modal-content winner-content">
+            <div class="confetti-container" id="confetti"></div>
+            <h2>🎉 Game Over! 🎉</h2>
+            <div class="winner-name" id="winner-name">Player wins!</div>
+            <div class="winner-actions">
+                <button class="btn btn-primary" id="rematch-btn">🔄 Rematch</button>
+                <button class="btn btn-secondary" id="back-lobby-btn">🏠 Back to Lobby</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <script src="game.js"></script>
+</body>
+</html>
