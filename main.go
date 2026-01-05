@@ -152,14 +152,7 @@ func startTurnTimeoutChecker(gm *models.GameManager, hub *handlers.Hub) {
 				skippedPlayer := game.ForceSkipTurn()
 				if skippedPlayer != "" {
 					log.Printf("Turn timeout for player %s in game %s", skippedPlayer, game.Code)
-					hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-						Type: "turn_timeout",
-						Data: map[string]interface{}{
-							"skipped_player": skippedPlayer,
-							"game":           game.GetGameState(),
-						},
-						Timestamp: time.Now(),
-					})
+					hub.BroadcastRefresh(game.Code, "turn_timeout")
 				}
 			}
 		}
@@ -189,38 +182,16 @@ func handleBotTurn(game *models.Game, hub *handlers.Hub) {
 	
 	// If bot hasn't rolled yet, roll the dice
 	if !hasRolled {
-		roll, err := game.RollDice(currentTurn)
+		_, err := game.RollDice(currentTurn)
 		if err != nil {
 			if err == models.ErrThreeSixes {
 				// Three sixes - turn is forfeited, broadcast and return
-				hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-					Type: "dice_rolled",
-					Data: map[string]interface{}{
-						"player_id":   currentTurn,
-						"roll":        roll,
-						"valid_moves": []int{},
-						"has_moves":   false,
-						"three_sixes": true,
-						"is_bot":      true,
-					},
-					Timestamp: time.Now(),
-				})
+				hub.BroadcastRefresh(game.Code, "dice_rolled")
 			}
 			return
 		}
 		
-		validMoves := game.GetValidMoves(currentTurn)
-		hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-			Type: "dice_rolled",
-			Data: map[string]interface{}{
-				"player_id":   currentTurn,
-				"roll":        roll,
-				"valid_moves": validMoves,
-				"has_moves":   len(validMoves) > 0,
-				"is_bot":      true,
-			},
-			Timestamp: time.Now(),
-		})
+		hub.BroadcastRefresh(game.Code, "dice_rolled")
 		
 		// Small delay before moving to make it feel more natural
 		time.Sleep(500 * time.Millisecond)
@@ -232,54 +203,15 @@ func handleBotTurn(game *models.Game, hub *handlers.Hub) {
 		if err := game.MovePiece(currentTurn, pieceID); err != nil {
 			// No valid moves, skip turn
 			game.SkipTurn(currentTurn)
-			hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-				Type: "turn_skipped",
-				Data: map[string]interface{}{
-					"player_id": currentTurn,
-					"is_bot":    true,
-					"game":      game.GetGameState(),
-				},
-				Timestamp: time.Now(),
-			})
+			hub.BroadcastRefresh(game.Code, "turn_skipped")
 			return
 		}
 		
-		newGameState := game.GetGameState()
-		hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-			Type: "piece_moved",
-			Data: map[string]interface{}{
-				"player_id": currentTurn,
-				"piece_id":  pieceID,
-				"is_bot":    true,
-				"game":      newGameState,
-			},
-			Timestamp: time.Now(),
-		})
-		
-		// Check for game end
-		if newGameState["state"] == "ended" {
-			hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-				Type: "game_ended",
-				Data: map[string]interface{}{
-					"winner":  newGameState["winner"],
-					"is_bot":  true,
-					"game":    newGameState,
-				},
-				Timestamp: time.Now(),
-			})
-		}
+		hub.BroadcastRefresh(game.Code, "piece_moved")
 	} else {
 		// No valid moves, skip turn
 		game.SkipTurn(currentTurn)
-		hub.BroadcastToGame(game.Code, handlers.WebSocketEvent{
-			Type: "turn_skipped",
-			Data: map[string]interface{}{
-				"player_id": currentTurn,
-				"is_bot":    true,
-				"game":      game.GetGameState(),
-			},
-			Timestamp: time.Now(),
-		})
+		hub.BroadcastRefresh(game.Code, "turn_skipped")
 	}
 }
 

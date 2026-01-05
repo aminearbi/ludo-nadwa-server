@@ -13,16 +13,9 @@ import (
 
 // WebSocket configuration
 const (
-	// Time allowed to write a message to the peer
-	writeWait = 10 * time.Second
-
-	// Time allowed to read the next pong message from the peer
-	pongWait = 60 * time.Second
-
-	// Send pings to peer with this period (must be less than pongWait)
-	pingPeriod = (pongWait * 9) / 10
-
-	// Maximum message size allowed from peer
+	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512
 )
 
@@ -30,7 +23,7 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for development
+		return true
 	},
 }
 
@@ -43,34 +36,25 @@ type Client struct {
 	playerID string
 }
 
-// Hub maintains the set of active clients and broadcasts messages
+// Hub maintains active clients and broadcasts refresh signals
 type Hub struct {
-	// Registered clients grouped by game code
-	games map[string]map[*Client]bool
-
-	// Register requests from clients
-	register chan *Client
-
-	// Unregister requests from clients
+	games      map[string]map[*Client]bool
+	register   chan *Client
 	unregister chan *Client
-
-	// Broadcast message to all clients in a game
-	broadcast chan *GameMessage
-
-	mu sync.RWMutex
+	broadcast  chan *GameMessage
+	mu         sync.RWMutex
 }
 
-// GameMessage represents a message to broadcast to a game
+// GameMessage represents a message to broadcast
 type GameMessage struct {
 	GameCode string
 	Message  []byte
 }
 
-// WebSocketEvent represents an event sent over WebSocket
-type WebSocketEvent struct {
-	Type      string                 `json:"type"`
-	Data      map[string]interface{} `json:"data"`
-	Timestamp time.Time              `json:"timestamp"`
+// RefreshEvent is the simplified event - just tells clients to fetch new state
+type RefreshEvent struct {
+	Type string `json:"type"` // Always "refresh"
+	Hint string `json:"hint"` // What changed: "dice_rolled", "piece_moved", "player_joined", etc.
 }
 
 // NewHub creates a new Hub
@@ -94,7 +78,7 @@ func (h *Hub) Run() {
 			}
 			h.games[client.gameCode][client] = true
 			h.mu.Unlock()
-			log.Printf("Client %s connected to game %s", client.playerID, client.gameCode)
+			log.Printf("WS: %s connected to game %s", client.playerID, client.gameCode)
 
 		case client := <-h.unregister:
 			h.mu.Lock()
@@ -108,7 +92,7 @@ func (h *Hub) Run() {
 				}
 			}
 			h.mu.Unlock()
-			log.Printf("Client %s disconnected from game %s", client.playerID, client.gameCode)
+			log.Printf("WS: %s disconnected from game %s", client.playerID, client.gameCode)
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
@@ -127,11 +111,15 @@ func (h *Hub) Run() {
 	}
 }
 
-// BroadcastToGame sends a message to all clients in a game
-func (h *Hub) BroadcastToGame(gameCode string, event WebSocketEvent) {
+// BroadcastRefresh sends a simple refresh signal to all clients in a game
+func (h *Hub) BroadcastRefresh(gameCode string, hint string) {
+	event := RefreshEvent{
+		Type: "refresh",
+		Hint: hint,
+	}
 	message, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Error marshaling event: %v", err)
+		log.Printf("Error marshaling refresh event: %v", err)
 		return
 	}
 
@@ -139,35 +127,6 @@ func (h *Hub) BroadcastToGame(gameCode string, event WebSocketEvent) {
 		GameCode: gameCode,
 		Message:  message,
 	}
-}
-
-// GetConnectedPlayers returns a list of connected player IDs for a game
-func (h *Hub) GetConnectedPlayers(gameCode string) []string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	players := []string{}
-	if clients, ok := h.games[gameCode]; ok {
-		for client := range clients {
-			players = append(players, client.playerID)
-		}
-	}
-	return players
-}
-
-// IsPlayerConnected checks if a player is connected to a game
-func (h *Hub) IsPlayerConnected(gameCode, playerID string) bool {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if clients, ok := h.games[gameCode]; ok {
-		for client := range clients {
-			if client.playerID == playerID {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // WebSocketHandler handles WebSocket connections
@@ -202,8 +161,11 @@ func (wsh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 	}
 
 	if _, exists := game.Players[playerID]; !exists {
-		http.Error(w, "Player not in game", http.StatusForbidden)
-		return
+		// Also allow spectators
+		if _, specExists := game.Spectators[playerID]; !specExists {
+			http.Error(w, "Player not in game", http.StatusForbidden)
+			return
+		}
 	}
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -222,41 +184,18 @@ func (wsh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 
 	wsh.hub.register <- client
 
-	// Mark player as connected in the game model
-	game.SetPlayerConnected(playerID, true)
+	// Notify others that someone connected (they should refresh)
+	wsh.hub.BroadcastRefresh(gameCode, "player_connected")
 
-	// Notify other players
-	wsh.hub.BroadcastToGame(gameCode, WebSocketEvent{
-		Type: "player_connected",
-		Data: map[string]interface{}{
-			"player_id":         playerID,
-			"connected_players": wsh.hub.GetConnectedPlayers(gameCode),
-		},
-		Timestamp: time.Now(),
-	})
-
-	// Start goroutines for reading and writing
 	go client.writePump()
 	go client.readPump(wsh)
 }
 
-// readPump pumps messages from the WebSocket connection to the hub
+// readPump handles incoming messages (just ping/pong)
 func (c *Client) readPump(wsh *WebSocketHandler) {
 	defer func() {
-		// Mark player as disconnected in the game model
-		if game, err := wsh.gameManager.GetGame(c.gameCode); err == nil {
-			game.SetPlayerConnected(c.playerID, false)
-		}
-		
-		// Notify other players of disconnect
-		wsh.hub.BroadcastToGame(c.gameCode, WebSocketEvent{
-			Type: "player_disconnected",
-			Data: map[string]interface{}{
-				"player_id":         c.playerID,
-				"connected_players": wsh.hub.GetConnectedPlayers(c.gameCode),
-			},
-			Timestamp: time.Now(),
-		})
+		// Notify others on disconnect
+		wsh.hub.BroadcastRefresh(c.gameCode, "player_disconnected")
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
@@ -277,22 +216,18 @@ func (c *Client) readPump(wsh *WebSocketHandler) {
 			break
 		}
 
-		// Handle incoming messages (e.g., ping/heartbeat)
+		// Handle ping from client
 		var msg map[string]interface{}
 		if err := json.Unmarshal(message, &msg); err == nil {
 			if msg["type"] == "ping" {
-				response, _ := json.Marshal(WebSocketEvent{
-					Type:      "pong",
-					Data:      map[string]interface{}{},
-					Timestamp: time.Now(),
-				})
+				response, _ := json.Marshal(map[string]string{"type": "pong"})
 				c.send <- response
 			}
 		}
 	}
 }
 
-// writePump pumps messages from the hub to the WebSocket connection
+// writePump sends messages to the client
 func (c *Client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
@@ -305,25 +240,11 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// Hub closed the channel
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
-			w, err := c.conn.NextWriter(websocket.TextMessage)
-			if err != nil {
-				return
-			}
-			w.Write(message)
-
-			// Add queued messages to the current WebSocket message
-			n := len(c.send)
-			for i := 0; i < n; i++ {
-				w.Write([]byte{'\n'})
-				w.Write(<-c.send)
-			}
-
-			if err := w.Close(); err != nil {
+			if err := c.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
 

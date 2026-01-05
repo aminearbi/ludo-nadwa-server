@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/aminearbi/ludo-nadwa-server/models"
 )
@@ -27,14 +26,10 @@ func (h *Handler) SetHub(hub *Hub) {
 	h.hub = hub
 }
 
-// broadcast sends a WebSocket event to all clients in a game
-func (h *Handler) broadcast(gameCode string, eventType string, data map[string]interface{}) {
+// broadcastRefresh sends a simple refresh hint to all clients in a game
+func (h *Handler) broadcastRefresh(gameCode string, hint string) {
 	if h.hub != nil {
-		h.hub.BroadcastToGame(gameCode, WebSocketEvent{
-			Type:      eventType,
-			Data:      data,
-			Timestamp: time.Now(),
-		})
+		h.hub.BroadcastRefresh(gameCode, hint)
 	}
 }
 
@@ -226,11 +221,7 @@ func (h *Handler) JoinGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast player joined event
-	h.broadcast(req.Code, "player_joined", map[string]interface{}{
-		"player_id":   req.PlayerID,
-		"player_name": req.PlayerName,
-		"game":        game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_joined")
 
 	response := JoinGameResponse{
 		Message: "Successfully joined the game",
@@ -270,9 +261,7 @@ func (h *Handler) StartGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast game started event
-	h.broadcast(req.Code, "game_started", map[string]interface{}{
-		"game": game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "game_started")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Game started successfully",
@@ -324,8 +313,7 @@ func (h *Handler) RollDice(w http.ResponseWriter, r *http.Request) {
 	roll, rollErr := game.RollDice(req.PlayerID)
 	
 	// Handle the three-sixes case - still report the roll but turn is lost
-	threeSixes := rollErr == models.ErrThreeSixes
-	if rollErr != nil && !threeSixes {
+	if rollErr != nil && rollErr != models.ErrThreeSixes {
 		respondWithError(w, rollErr.Error(), http.StatusBadRequest)
 		return
 	}
@@ -334,19 +322,7 @@ func (h *Handler) RollDice(w http.ResponseWriter, r *http.Request) {
 	game.UpdateActivity()
 
 	// Broadcast dice roll event
-	eventData := map[string]interface{}{
-		"player_id":    req.PlayerID,
-		"roll":         roll,
-		"valid_moves":  validMoves,
-		"has_moves":    len(validMoves) > 0,
-		"three_sixes":  threeSixes,
-	}
-	
-	if threeSixes {
-		eventData["message"] = "Three consecutive sixes! Turn forfeited."
-	}
-	
-	h.broadcast(req.Code, "dice_rolled", eventData)
+	h.broadcastRefresh(req.Code, "dice_rolled")
 
 	response := RollDiceResponse{
 		Roll:       roll,
@@ -384,19 +360,7 @@ func (h *Handler) MovePiece(w http.ResponseWriter, r *http.Request) {
 	gameState := game.GetGameState()
 
 	// Broadcast piece moved event
-	h.broadcast(req.Code, "piece_moved", map[string]interface{}{
-		"player_id": req.PlayerID,
-		"piece_id":  req.PieceID,
-		"game":      gameState,
-	})
-
-	// Check for game end
-	if gameState["state"] == "ended" {
-		h.broadcast(req.Code, "game_ended", map[string]interface{}{
-			"winner": gameState["winner"],
-			"game":   gameState,
-		})
-	}
+	h.broadcastRefresh(req.Code, "piece_moved")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Piece moved successfully",
@@ -435,10 +399,7 @@ func (h *Handler) SkipTurn(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast turn skipped event
-	h.broadcast(req.Code, "turn_skipped", map[string]interface{}{
-		"player_id": req.PlayerID,
-		"game":      game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "turn_skipped")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Turn skipped",
@@ -471,12 +432,7 @@ func (h *Handler) SetReady(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast player ready status change
-	h.broadcast(req.Code, "player_ready", map[string]interface{}{
-		"player_id":        req.PlayerID,
-		"ready":            req.Ready,
-		"all_players_ready": game.AreAllPlayersReady(),
-		"game":             game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_ready")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message":          "Ready status updated",
@@ -510,10 +466,7 @@ func (h *Handler) KickPlayer(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast player kicked event
-	h.broadcast(req.Code, "player_kicked", map[string]interface{}{
-		"player_id": req.PlayerToKick,
-		"game":      game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_kicked")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Player kicked successfully",
@@ -546,10 +499,7 @@ func (h *Handler) LeaveGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast player left event
-	h.broadcast(req.Code, "player_left", map[string]interface{}{
-		"player_id": req.PlayerID,
-		"game":      game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_left")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Left game successfully",
@@ -581,10 +531,7 @@ func (h *Handler) PauseGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast game paused event
-	h.broadcast(req.Code, "game_paused", map[string]interface{}{
-		"paused_by": req.PlayerID,
-		"game":      game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "game_paused")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Game paused",
@@ -617,10 +564,7 @@ func (h *Handler) ResumeGame(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast game resumed event
-	h.broadcast(req.Code, "game_resumed", map[string]interface{}{
-		"resumed_by": req.PlayerID,
-		"game":       game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "game_resumed")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Game resumed",
@@ -652,18 +596,8 @@ func (h *Handler) SendChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get player name
-	playerName := "Unknown"
-	if player, exists := game.Players[req.PlayerID]; exists {
-		playerName = player.Name
-	}
-
 	// Broadcast chat message event
-	h.broadcast(req.Code, "chat_message", map[string]interface{}{
-		"player_id":   req.PlayerID,
-		"player_name": playerName,
-		"message":     req.Message,
-	})
+	h.broadcastRefresh(req.Code, "chat_message")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Chat message sent",
@@ -690,11 +624,7 @@ func (h *Handler) JoinAsSpectator(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast spectator joined event
-	h.broadcast(req.Code, "spectator_joined", map[string]interface{}{
-		"spectator_id":   req.SpectatorID,
-		"spectator_name": req.SpectatorName,
-		"game":           game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "spectator_joined")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Joined as spectator",
@@ -727,10 +657,7 @@ func (h *Handler) Rematch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast rematch event
-	h.broadcast(req.Code, "rematch", map[string]interface{}{
-		"message": "Rematch started - waiting for all players to be ready",
-		"game":    game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "rematch")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Rematch started - waiting for all players to be ready",
@@ -806,12 +733,7 @@ func (h *Handler) AddBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast bot joined event
-	h.broadcast(req.Code, "player_joined", map[string]interface{}{
-		"player_id":   bot.ID,
-		"player_name": bot.Name,
-		"is_bot":      true,
-		"game":        game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_joined")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Bot added successfully",
@@ -840,11 +762,7 @@ func (h *Handler) RemoveBot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Broadcast bot left event
-	h.broadcast(req.Code, "player_left", map[string]interface{}{
-		"player_id": req.BotID,
-		"is_bot":    true,
-		"game":      game.GetGameState(),
-	})
+	h.broadcastRefresh(req.Code, "player_left")
 
 	respondWithJSON(w, map[string]interface{}{
 		"message": "Bot removed successfully",

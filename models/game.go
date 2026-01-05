@@ -184,7 +184,6 @@ type Player struct {
 	Color        PlayerColor `json:"color"`
 	Pieces       []Piece     `json:"pieces"`
 	Order        int         `json:"order"`         // Turn order (randomized at start)
-	IsConnected  bool        `json:"is_connected"`  // WebSocket connection status
 	LastActivity time.Time   `json:"last_activity"` // Last activity timestamp
 	IsReady      bool        `json:"is_ready"`      // Ready to start
 	IsHost       bool        `json:"is_host"`       // Is game host
@@ -195,7 +194,6 @@ type Player struct {
 type Spectator struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
-	IsConnected  bool      `json:"is_connected"`
 	LastActivity time.Time `json:"last_activity"`
 }
 
@@ -274,7 +272,6 @@ var (
 	ErrNotPlayerTurn      = errors.New("not player's turn")
 	ErrInvalidMove        = errors.New("invalid move")
 	ErrTurnTimeout        = errors.New("turn timeout")
-	ErrPlayerDisconnected = errors.New("player disconnected")
 	ErrNotHost            = errors.New("only host can perform this action")
 	ErrPlayersNotReady    = errors.New("not all players are ready")
 	ErrInvalidPlayerName  = errors.New("invalid player name")
@@ -374,7 +371,6 @@ func (gm *GameManager) CreateGame(hostID, hostName string, maxPlayers int) (*Gam
 		Color:        Red,
 		Pieces:       pieces,
 		Order:        0,
-		IsConnected:  false,
 		LastActivity: time.Now(),
 		IsReady:      false,
 		IsHost:       true,
@@ -472,7 +468,6 @@ func (gm *GameManager) JoinGame(code, playerID, playerName string) (*Game, error
 		Color:        color,
 		Pieces:       pieces,
 		Order:        len(game.Players),
-		IsConnected:  false,
 		LastActivity: time.Now(),
 		IsReady:      false,
 		IsHost:       false,
@@ -548,7 +543,6 @@ func (gm *GameManager) AddBot(code, hostID string) (*Game, *Player, error) {
 		Color:        color,
 		Pieces:       pieces,
 		Order:        len(game.Players),
-		IsConnected:  true, // Bots are always "connected"
 		LastActivity: time.Now(),
 		IsReady:      true, // Bots are always ready
 		IsHost:       false,
@@ -661,7 +655,6 @@ func (gm *GameManager) JoinAsSpectator(code, spectatorID, spectatorName string) 
 	game.Spectators[spectatorID] = &Spectator{
 		ID:           spectatorID,
 		Name:         strings.TrimSpace(spectatorName),
-		IsConnected:  false,
 		LastActivity: time.Now(),
 	}
 
@@ -779,7 +772,7 @@ func (g *Game) LeaveGame(playerID string) error {
 			order++
 		}
 	} else if g.State == Playing {
-		player.IsConnected = false
+		// If leaving player's turn, move to next
 		if g.CurrentTurn == playerID {
 			g.nextTurn()
 		}
@@ -1166,34 +1159,14 @@ func (g *Game) checkAndCapture(currentPlayerID string, position int) bool {
 func (g *Game) nextTurn() {
 	currentPlayer := g.Players[g.CurrentTurn]
 	nextOrder := (currentPlayer.Order + 1) % len(g.Players)
-	playerCount := len(g.Players)
-	skipped := 0
 
-	// Find next connected player (skip disconnected ones)
-	for skipped < playerCount {
-		for _, player := range g.Players {
-			if player.Order == nextOrder {
-				if player.IsConnected {
-					g.CurrentTurn = player.ID
-					g.TurnStartTime = time.Now()
-					g.HasRolled = false
-					return
-				}
-				// Skip disconnected player
-				nextOrder = (nextOrder + 1) % playerCount
-				skipped++
-				break
-			}
-		}
-	}
-
-	// All players disconnected - should not happen, but fallback
+	// Simple round-robin - find player with next order
 	for _, player := range g.Players {
-		if player.Order == (currentPlayer.Order+1)%playerCount {
+		if player.Order == nextOrder {
 			g.CurrentTurn = player.ID
 			g.TurnStartTime = time.Now()
 			g.HasRolled = false
-			break
+			return
 		}
 	}
 }
@@ -1403,29 +1376,6 @@ func (g *Game) UpdateActivity() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.LastActivity = time.Now()
-}
-
-// SetPlayerConnected updates a player's connection status
-func (g *Game) SetPlayerConnected(playerID string, connected bool) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if player, exists := g.Players[playerID]; exists {
-		player.IsConnected = connected
-		player.LastActivity = time.Now()
-		g.LastActivity = time.Now()
-	}
-}
-
-// GetPlayerConnectionStatus returns whether a player is connected
-func (g *Game) GetPlayerConnectionStatus(playerID string) bool {
-	g.mu.RLock()
-	defer g.mu.RUnlock()
-
-	if player, exists := g.Players[playerID]; exists {
-		return player.IsConnected
-	}
-	return false
 }
 
 // IsTurnTimedOut checks if the current turn has exceeded the timeout

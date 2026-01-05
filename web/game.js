@@ -512,12 +512,14 @@ async function rollDice() {
             player_id: gameState.playerId
         });
         
+        // Immediately mark as rolled to prevent double-rolls
+        gameState.hasRolled = true;
+        gameState.lastDiceRoll = response.roll;
+        gameState.validMoves = response.valid_moves || [];
+        
         setTimeout(() => {
             elements.dice.classList.remove('rolling');
             elements.diceFace.textContent = response.roll;
-            gameState.lastDiceRoll = response.roll;
-            gameState.hasRolled = true;
-            gameState.validMoves = response.valid_moves;
             
             if (response.roll === 6) {
                 showSixEffect();
@@ -532,8 +534,9 @@ async function rollDice() {
         if (!error.message.includes('not your turn') && !error.message.includes('already rolled')) {
             showToast(error.message, 'error');
         }
-        // Reset UI state - updateUI will set proper button disabled state
-        updateUI();
+        // Keep roll button disabled if we already rolled (don't reset based on potentially stale local state)
+        // The button state will be corrected when we receive the next game state update via WebSocket
+        elements.rollBtn.disabled = true;
     }
 }
 
@@ -617,6 +620,12 @@ async function leaveGame() {
         });
     } catch (error) {}
     
+    // Clean up WebSocket and polling
+    if (wsReconnectTimer) {
+        clearTimeout(wsReconnectTimer);
+        wsReconnectTimer = null;
+    }
+    stopPolling();
     if (gameState.ws) {
         gameState.ws.close();
     }
@@ -625,12 +634,24 @@ async function leaveGame() {
 }
 
 // ==================== WebSocket ====================
+let wsReconnectTimer = null;
+let pollInterval = null;
+
 function connectWebSocket() {
+    if (gameState.ws && gameState.ws.readyState === WebSocket.OPEN) {
+        return; // Already connected
+    }
+    
     const wsUrl = `${WS_BASE}/ws?code=${gameState.code}&player_id=${gameState.playerId}`;
     gameState.ws = new WebSocket(wsUrl);
     
     gameState.ws.onopen = () => {
         console.log('WebSocket connected');
+        // Stop polling if it was running as fallback
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
     };
     
     gameState.ws.onmessage = (event) => {
@@ -640,6 +661,16 @@ function connectWebSocket() {
     
     gameState.ws.onclose = () => {
         console.log('WebSocket disconnected');
+        // Start polling as fallback
+        startPolling();
+        // Try to reconnect after a delay
+        if (gameState.code) {
+            wsReconnectTimer = setTimeout(() => {
+                if (gameState.code) {
+                    connectWebSocket();
+                }
+            }, 3000);
+        }
     };
     
     gameState.ws.onerror = (error) => {
@@ -647,119 +678,101 @@ function connectWebSocket() {
     };
 }
 
-function handleWebSocketMessage(message) {
-    console.log('WS Message:', message.type, message.data);
+function startPolling() {
+    if (pollInterval) return; // Already polling
+    console.log('Starting polling fallback');
+    pollInterval = setInterval(async () => {
+        if (gameState.code) {
+            await fetchGameState();
+        }
+    }, 2000); // Poll every 2 seconds
+}
+
+function stopPolling() {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
+
+// Simple handler - just fetch fresh state from server
+async function handleWebSocketMessage(message) {
+    console.log('WS Message:', message.type, message.hint);
     
-    switch (message.type) {
-        case 'player_joined':
-        case 'player_left':
-        case 'player_kicked':
-        case 'player_ready':
-            updateFromGameState(message.data.game);
-            if (message.type === 'player_joined') {
-                showToast(`${getPlayerName(message.data.player_id)} joined!`, 'success');
-            } else if (message.type === 'player_left') {
-                showToast(`A player left`, 'warning');
-            }
-            break;
-            
-        case 'game_started':
-            updateFromGameState(message.data.game);
+    if (message.type === 'refresh') {
+        await fetchGameState(message.hint);
+    } else if (message.type === 'pong') {
+        // Heartbeat response, ignore
+    }
+}
+
+// Fetch game state from server (source of truth)
+async function fetchGameState(hint) {
+    try {
+        const response = await fetch(`${API_BASE}/api/game/state?code=${gameState.code}`);
+        if (!response.ok) {
+            throw new Error('Failed to fetch game state');
+        }
+        const game = await response.json();
+        
+        // Store old state for animations
+        const oldState = gameState.state;
+        const oldTurn = gameState.currentTurn;
+        
+        updateFromGameState(game);
+        
+        // Handle state transitions based on hint
+        if (hint === 'game_started' && oldState !== 'playing') {
             showGameScreen();
             showToast('Game started! 🎲', 'success');
-            break;
-            
-        case 'dice_rolled':
-            if (message.data.player_id !== gameState.playerId) {
-                elements.diceFace.textContent = message.data.roll;
-                gameState.lastDiceRoll = message.data.roll;
-                if (message.data.roll === 6) {
-                    showSixEffect();
-                }
-                if (message.data.three_sixes) {
-                    showToast(`${getPlayerName(message.data.player_id)} rolled 3 sixes! Turn lost!`, 'warning');
-                }
-            }
-            break;
-            
-        case 'piece_moved':
-            // Store old positions and state before update
-            const oldPositions = new Map();
-            const oldPieceStates = new Map();
-            Object.values(gameState.players).forEach(player => {
-                if (!player.pieces) return;
-                player.pieces.forEach((piece, idx) => {
-                    const key = `${player.color}-${idx}`;
-                    if (lastPiecePositions.has(key)) {
-                        oldPositions.set(key, lastPiecePositions.get(key));
-                    }
-                    // Store the actual piece state
-                    oldPieceStates.set(key, {
-                        position: piece.position,
-                        home_stretch_position: piece.home_stretch_position,
-                        is_home: piece.is_home,
-                        is_finished: piece.is_finished,
-                        color: player.color
-                    });
-                });
-            });
-            
-            updateFromGameState(message.data.game);
-            
-            // Detect which piece moved and animate it
-            if (message.data.player_id && message.data.piece_id !== undefined) {
-                const movedPlayer = gameState.players[message.data.player_id];
-                if (movedPlayer) {
-                    const pieceKey = `${movedPlayer.color}-${message.data.piece_id}`;
-                    const oldPos = oldPositions.get(pieceKey);
-                    const oldState = oldPieceStates.get(pieceKey);
-                    if (oldPos && oldState) {
-                        animatePieceMovement(pieceKey, oldPos, oldState);
-                    }
-                }
-            }
-            
-            if (message.data.captured) {
-                showKillEffect();
-                playSound('captureSound');
-            }
-            drawBoard();
-            updateUI();
-            break;
-            
-        case 'turn_skipped':
-        case 'turn_timeout':
-            updateFromGameState(message.data.game);
-            if (message.type === 'turn_timeout') {
-                showToast(`${getPlayerName(message.data.skipped_player)} timed out!`, 'warning');
-            }
-            drawBoard();
-            updateUI();
-            break;
-            
-        case 'game_ended':
-            updateFromGameState(message.data.game);
-            showWinner(message.data.winner);
-            break;
-            
-        case 'chat_message':
-            addChatMessage(message.data.player_name, message.data.message, message.data.player_id);
-            break;
-            
-        case 'game_paused':
+        } else if (hint === 'player_joined') {
+            showToast('A player joined!', 'success');
+        } else if (hint === 'player_left' || hint === 'player_kicked') {
+            showToast('A player left', 'warning');
+        } else if (hint === 'game_paused') {
             showToast('Game paused', 'warning');
-            break;
-            
-        case 'game_resumed':
+        } else if (hint === 'game_resumed') {
             showToast('Game resumed', 'success');
-            break;
-            
-        case 'rematch':
-            updateFromGameState(message.data.game);
+        } else if (hint === 'rematch') {
             showWaitingRoom();
             elements.winnerModal.classList.remove('active');
             showToast('Rematch! Get ready!', 'success');
-            break;
+        } else if (hint === 'chat_message') {
+            // Fetch chat separately to get new messages
+            fetchChat();
+        }
+        
+        // Update UI based on current state
+        if (gameState.state === 'playing') {
+            drawBoard();
+            updateUI();
+        } else if (gameState.state === 'ended' && game.winner) {
+            showWinner(game.winner);
+        }
+        
+        // Update waiting room if in waiting state
+        if (gameState.state === 'waiting') {
+            updatePlayersUI();
+        }
+        
+    } catch (error) {
+        console.error('Error fetching game state:', error);
+    }
+}
+
+async function fetchChat() {
+    try {
+        const response = await fetch(`${API_BASE}/api/game/chat?code=${gameState.code}`);
+        if (response.ok) {
+            const data = await response.json();
+            // Update chat display with new messages
+            if (data.chat_messages && data.chat_messages.length > 0) {
+                const lastMsg = data.chat_messages[data.chat_messages.length - 1];
+                addChatMessage(lastMsg.player_name, lastMsg.message, lastMsg.player_id);
+            }
+        }
+    } catch (error) {
+        console.error('Error fetching chat:', error);
     }
 }
 
@@ -820,9 +833,15 @@ function updatePlayersUI() {
 }
 
 function updateWaitingPlayersUI() {
+    console.log('updateWaitingPlayersUI called');
+    console.log('gameState.players:', gameState.players);
+    console.log('gameState.isHost:', gameState.isHost);
+    console.log('gameState.playerId:', gameState.playerId);
+    
     elements.playersList.innerHTML = '';
     
     Object.values(gameState.players).forEach(player => {
+        console.log('Rendering player:', player);
         const card = document.createElement('div');
         card.className = `player-card ${player.is_ready ? 'ready' : ''} ${player.is_host ? 'host' : ''}`;
         
@@ -841,9 +860,14 @@ function updateWaitingPlayersUI() {
     const allReady = Object.values(gameState.players).every(p => p.is_ready);
     const enoughPlayers = Object.keys(gameState.players).length >= 2;
     
+    console.log('allReady:', allReady, 'enoughPlayers:', enoughPlayers, 'isHost:', gameState.isHost);
+    
     if (gameState.isHost) {
         elements.startBtn.style.display = 'inline-flex';
         elements.startBtn.disabled = !(allReady && enoughPlayers);
+        console.log('Start button shown, disabled:', elements.startBtn.disabled);
+    } else {
+        console.log('Not host, start button stays hidden');
     }
 }
 
@@ -959,6 +983,11 @@ function updateValidMoves() {
 function showWaitingRoom() {
     elements.displayCode.textContent = gameState.code;
     showScreen('waiting');
+    
+    // Sync ready checkbox with server state
+    const myPlayer = gameState.players[gameState.playerId];
+    elements.readyCheckbox.checked = myPlayer ? myPlayer.is_ready : false;
+    
     updateWaitingPlayersUI();
 }
 
