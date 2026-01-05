@@ -122,7 +122,7 @@ func main() {
 	log.Printf("")
 	log.Printf("🎲 Open http://localhost:%s in your browser to play!", port)
 
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	if err := http.ListenAndServe("0.0.0.0:"+port, nil); err != nil {
 		log.Fatal(err)
 	}
 }

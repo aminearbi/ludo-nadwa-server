@@ -222,6 +222,9 @@ func (wsh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 
 	wsh.hub.register <- client
 
+	// Mark player as connected in the game model
+	game.SetPlayerConnected(playerID, true)
+
 	// Notify other players
 	wsh.hub.BroadcastToGame(gameCode, WebSocketEvent{
 		Type: "player_connected",
@@ -240,6 +243,11 @@ func (wsh *WebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *http.Requ
 // readPump pumps messages from the WebSocket connection to the hub
 func (c *Client) readPump(wsh *WebSocketHandler) {
 	defer func() {
+		// Mark player as disconnected in the game model
+		if game, err := wsh.gameManager.GetGame(c.gameCode); err == nil {
+			game.SetPlayerConnected(c.playerID, false)
+		}
+		
 		// Notify other players of disconnect
 		wsh.hub.BroadcastToGame(c.gameCode, WebSocketEvent{
 			Type: "player_disconnected",
